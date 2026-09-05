@@ -1,0 +1,28 @@
+# Node.js
+node_modules/
+.next/
+out/
+
+# Python
+venv/
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+
+# Environment variables
+.env
+.env.local
+
+# IDE
+.vscode/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Docker
+postgres_data/

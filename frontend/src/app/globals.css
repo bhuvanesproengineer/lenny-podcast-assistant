@@ -1,0 +1,86 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: #0F0F0F;
+  --foreground: #F3F4F6;
+  --sidebar: #171717;
+  --card: #212121;
+  --border: #2A2A2A;
+  --accent: #3B82F6;
+  --accent-hover: #60A5FA;
+  --text-muted: #9CA3AF;
+}
+
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Custom Sleek AI SaaS Scrollbars */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #2A2A2A;
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3B82F6;
+}
+
+/* Highlight.js Dark Theme Overrides */
+pre code.hljs {
+  display: block;
+  overflow-x: auto;
+  padding: 1em;
+}
+
+.hljs {
+  color: #c9d1d9;
+  background: #0d1117;
+}
+
+.hljs-comment,
+.hljs-punctuation {
+  color: #8b949e;
+}
+
+.hljs-attr,
+.hljs-attribute {
+  color: #79c0ff;
+}
+
+.hljs-keyword,
+.hljs-selector-tag {
+  color: #ff7b72;
+}
+
+.hljs-string,
+.hljs-number,
+.hljs-literal {
+  color: #a5d6ff;
+}
+
+.hljs-title,
+.hljs-section {
+  color: #d2a8ff;
+  font-weight: bold;
+}
+
+.hljs-variable,
+.hljs-template-variable {
+  color: #ffa657;
+}

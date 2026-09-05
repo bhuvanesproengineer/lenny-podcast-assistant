@@ -1,0 +1,114 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: lenny-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_DB: ${POSTGRES_DB:-lenny_growth_db}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres} -d ${POSTGRES_DB:-lenny_growth_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - lenny-network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: lenny-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-lenny_growth_db}}
+      - SYNC_DATABASE_URL=${SYNC_DATABASE_URL:-postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-postgres}@postgres:5432/${POSTGRES_DB:-lenny_growth_db}}
+      - LLM_PROVIDER=${LLM_PROVIDER:-cloud}
+      - FALLBACK_TO_LOCAL=${FALLBACK_TO_LOCAL:-true}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - OPENROUTER_BASE_URL=${OPENROUTER_BASE_URL:-https://openrouter.ai/api/v1}
+      - CLOUD_MODEL=${CLOUD_MODEL:-anthropic/claude-sonnet-4}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OLLAMA_BASE_URL=${OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      - OLLAMA_DEFAULT_MODEL=${OLLAMA_DEFAULT_MODEL:-llama3.2:3b}
+      - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-ollama}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-nomic-embed-text}
+      - EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION:-768}
+      - EMBEDDING_BATCH_SIZE=${EMBEDDING_BATCH_SIZE:-50}
+      - SIMILARITY_TOP_K=${SIMILARITY_TOP_K:-6}
+      - SIMILARITY_THRESHOLD=${SIMILARITY_THRESHOLD:-0.65}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,http://frontend:3000}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - ENVIRONMENT=${ENVIRONMENT:-production}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - lenny-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    container_name: lenny-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+      - NODE_ENV=production
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - lenny-network
+
+networks:
+  lenny-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+    driver: local
