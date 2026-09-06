@@ -87,6 +87,16 @@ The relational and vector schema runs on PostgreSQL with the `pgvector` extensio
 
 ---
 
+## Transcript Data
+
+The original transcript repository was used during the ingestion process.
+
+All transcript content has been processed and stored in PostgreSQL + pgvector.
+
+Runtime retrieval is performed directly against the vector database and does not require the raw transcript files.
+
+---
+
 ## Environment Variables
 
 ### Application & Server Settings

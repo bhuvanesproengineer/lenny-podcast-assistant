@@ -26,3 +26,6 @@ Thumbs.db
 
 # Docker
 postgres_data/
+
+# Offline / Ingestion Data
+lennys-podcast-transcripts/
