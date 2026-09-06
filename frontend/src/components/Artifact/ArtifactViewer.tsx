@@ -42,7 +42,9 @@ export function ArtifactViewer({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [copied, setCopied] = useState(false);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
+  const [isExportingDocx, setIsExportingDocx] = useState(false);
   const [isExportingNative, setIsExportingNative] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
   const [showExportMenu, setShowExportMenu] = useState(false);
   const exportMenuRef = useRef<HTMLDivElement>(null);
 
@@ -63,6 +65,13 @@ export function ArtifactViewer({
     }
   }, [showExportMenu]);
 
+  useEffect(() => {
+    if (exportError) {
+      const timer = setTimeout(() => setExportError(null), 5000);
+      return () => clearTimeout(timer);
+    }
+  }, [exportError]);
+
   if (!isOpen || !artifact) return null;
 
   const artifactType = detectArtifactType(artifact);
@@ -82,29 +91,52 @@ export function ArtifactViewer({
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleExportNative = () => {
-    try {
-      setIsExportingNative(true);
-      if (artifactType === 'html') {
-        api.downloadHtml(exportContent, artifact.title);
-      } else {
-        api.downloadMarkdown(exportContent, artifact.title);
-      }
-    } catch (err: any) {
-      console.error('Failed to export native document:', err);
-    } finally {
-      setIsExportingNative(false);
-    }
-  };
-
   const handleExportPdf = async () => {
     try {
       setIsExportingPdf(true);
-      await api.downloadExport('pdf', markdownText, artifact.title);
+      setExportError(null);
+      const textToExport = markdownText.trim() || exportContent.trim() || artifact.title;
+      await api.downloadExport('pdf', textToExport, artifact.title);
     } catch (err: any) {
       console.error('Failed to download PDF:', err);
+      setExportError(err?.message || 'Failed to export PDF. Please try again.');
     } finally {
       setIsExportingPdf(false);
+    }
+  };
+
+  const handleExportDocx = async () => {
+    try {
+      setIsExportingDocx(true);
+      setExportError(null);
+      const textToExport = markdownText.trim() || exportContent.trim() || artifact.title;
+      await api.downloadExport('docx', textToExport, artifact.title);
+    } catch (err: any) {
+      console.error('Failed to download Word document:', err);
+      setExportError(err?.message || 'Failed to export Word document. Please try again.');
+    } finally {
+      setIsExportingDocx(false);
+    }
+  };
+
+  const handleExportMarkdown = () => {
+    try {
+      setExportError(null);
+      api.downloadMarkdown(markdownText || exportContent, artifact.title);
+    } catch (err: any) {
+      console.error('Failed to export markdown:', err);
+      setExportError('Failed to export markdown file.');
+    }
+  };
+
+  const handleExportHtml = () => {
+    try {
+      setExportError(null);
+      const htmlContent = artifact.htmlContent || htmlDisplay;
+      api.downloadHtml(htmlContent, artifact.title);
+    } catch (err: any) {
+      console.error('Failed to export HTML:', err);
+      setExportError('Failed to export HTML file.');
     }
   };
 
@@ -165,33 +197,31 @@ export function ArtifactViewer({
             </div>
           </div>
 
-          {/* Action buttons with Native Export as Default and PDF as Optional */}
+          {/* Action buttons with PDF Export as Primary Default */}
           <div className="flex items-center gap-1.5 shrink-0">
-            {/* Primary Action: Native Export + Optional Dropdown */}
+            {/* Primary Action: PDF Export + Optional Dropdown */}
             <div className="relative inline-flex items-center rounded-md shadow-sm" ref={exportMenuRef}>
               <Button
                 variant="primary"
                 size="sm"
-                onClick={handleExportNative}
-                disabled={isExportingNative}
+                onClick={handleExportPdf}
+                disabled={isExportingPdf}
                 leftIcon={
-                  isExportingNative ? (
+                  isExportingPdf ? (
                     <Loader2 className="w-3.5 h-3.5 animate-spin text-white" />
                   ) : (
                     <Download className="w-3.5 h-3.5 text-white" />
                   )
                 }
                 className="text-xs h-8 px-2.5 bg-[#3B82F6] hover:bg-[#60A5FA] text-[#F3F4F6] font-medium rounded-r-none border-r border-blue-400/30 shadow-sm shadow-blue-500/25"
-                title={`Download ${artifactType === 'html' ? 'HTML (.html)' : 'Markdown (.md)'} - Native format`}
+                title="Download publication-ready PDF document (.pdf)"
               >
-                {isExportingNative
-                  ? 'Exporting...'
-                  : `Export (${artifactType === 'html' ? '.html' : '.md'})`}
+                {isExportingPdf ? 'Exporting PDF...' : 'Export (PDF)'}
               </Button>
               <button
                 type="button"
                 onClick={() => setShowExportMenu((prev) => !prev)}
-                disabled={isExportingPdf || isExportingNative}
+                disabled={isExportingPdf || isExportingDocx || isExportingNative}
                 className="h-8 px-1.5 bg-[#3B82F6] hover:bg-[#60A5FA] text-[#F3F4F6] rounded-r-md transition-colors cursor-pointer flex items-center justify-center focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#3B82F6]/50 shadow-sm shadow-blue-500/25"
                 title="Choose export format"
               >
@@ -205,26 +235,11 @@ export function ArtifactViewer({
 
               {/* Export Format Dropdown Menu */}
               {showExportMenu && (
-                <div className="absolute right-0 top-full mt-1.5 w-52 rounded-lg bg-[#212121] border border-[#2A2A2A] shadow-xl py-1 z-50 animate-in fade-in zoom-in-95 duration-100">
+                <div className="absolute right-0 top-full mt-1.5 w-56 rounded-lg bg-[#212121] border border-[#2A2A2A] shadow-xl py-1 z-50 animate-in fade-in zoom-in-95 duration-100">
                   <div className="px-3 py-1 text-[10px] uppercase font-semibold tracking-wider text-[#9CA3AF]/70 border-b border-[#2A2A2A]">
                     Export Formats
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowExportMenu(false);
-                      handleExportNative();
-                    }}
-                    className="w-full text-left px-3 py-2 text-xs text-[#F3F4F6] hover:bg-[#2A2A2A] flex items-center justify-between transition-colors cursor-pointer"
-                  >
-                    <span className="flex items-center gap-2">
-                      <Download className="w-3.5 h-3.5 text-[#60A5FA]" />
-                      {artifactType === 'html' ? 'HTML (.html)' : 'Markdown (.md)'}
-                    </span>
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#3B82F6]/20 text-[#60A5FA] font-medium">
-                      Default
-                    </span>
-                  </button>
+                  {/* PDF option (Default) */}
                   <button
                     type="button"
                     onClick={() => {
@@ -232,18 +247,77 @@ export function ArtifactViewer({
                       handleExportPdf();
                     }}
                     disabled={isExportingPdf}
-                    className="w-full text-left px-3 py-2 text-xs text-[#9CA3AF] hover:text-[#F3F4F6] hover:bg-[#2A2A2A] flex items-center justify-between transition-colors cursor-pointer"
+                    className="w-full text-left px-3 py-2 text-xs text-[#F3F4F6] hover:bg-[#2A2A2A] flex items-center justify-between transition-colors cursor-pointer"
                   >
-                    <span className="flex items-center gap-2">
+                    <span className="flex items-center gap-2 font-medium">
                       {isExportingPdf ? (
-                        <Loader2 className="w-3.5 h-3.5 animate-spin text-[#9CA3AF]" />
+                        <Loader2 className="w-3.5 h-3.5 animate-spin text-[#60A5FA]" />
                       ) : (
-                        <FileText className="w-3.5 h-3.5 text-[#9CA3AF]" />
+                        <FileText className="w-3.5 h-3.5 text-[#60A5FA]" />
                       )}
                       PDF (.pdf)
                     </span>
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#3B82F6]/20 text-[#60A5FA] font-medium">
+                      Default
+                    </span>
+                  </button>
+
+                  {/* Word DOCX option */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowExportMenu(false);
+                      handleExportDocx();
+                    }}
+                    disabled={isExportingDocx}
+                    className="w-full text-left px-3 py-2 text-xs text-[#9CA3AF] hover:text-[#F3F4F6] hover:bg-[#2A2A2A] flex items-center justify-between transition-colors cursor-pointer"
+                  >
+                    <span className="flex items-center gap-2">
+                      {isExportingDocx ? (
+                        <Loader2 className="w-3.5 h-3.5 animate-spin text-[#9CA3AF]" />
+                      ) : (
+                        <FileCode className="w-3.5 h-3.5 text-[#9CA3AF]" />
+                      )}
+                      Word (.docx)
+                    </span>
                     <span className="text-[10px] text-[#9CA3AF]/60">
-                      Optional
+                      Document
+                    </span>
+                  </button>
+
+                  {/* Markdown option */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowExportMenu(false);
+                      handleExportMarkdown();
+                    }}
+                    className="w-full text-left px-3 py-2 text-xs text-[#9CA3AF] hover:text-[#F3F4F6] hover:bg-[#2A2A2A] flex items-center justify-between transition-colors cursor-pointer"
+                  >
+                    <span className="flex items-center gap-2">
+                      <Download className="w-3.5 h-3.5 text-[#9CA3AF]" />
+                      Markdown (.md)
+                    </span>
+                    <span className="text-[10px] text-[#9CA3AF]/60">
+                      Markdown
+                    </span>
+                  </button>
+
+                  {/* HTML option */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowExportMenu(false);
+                      handleExportHtml();
+                    }}
+                    className="w-full text-left px-3 py-2 text-xs text-[#9CA3AF] hover:text-[#F3F4F6] hover:bg-[#2A2A2A] flex items-center justify-between transition-colors cursor-pointer"
+                  >
+                    <span className="flex items-center gap-2">
+                      <Code2 className="w-3.5 h-3.5 text-[#9CA3AF]" />
+                      HTML (.html)
+                    </span>
+                    <span className="text-[10px] text-[#9CA3AF]/60">
+                      Web
                     </span>
                   </button>
                 </div>
@@ -302,6 +376,19 @@ export function ArtifactViewer({
             onChange={(tab) => setActiveTab(tab as ArtifactTab)}
           />
         </div>
+
+        {exportError && (
+          <div className="px-3 py-1.5 bg-red-500/10 border border-red-500/30 text-red-400 text-xs rounded-md flex items-center justify-between animate-in fade-in duration-150">
+            <span>{exportError}</span>
+            <button
+              onClick={() => setExportError(null)}
+              className="text-red-400 hover:text-red-200 ml-2"
+              title="Dismiss error"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Tab Content Body with Independent Scrolling */}

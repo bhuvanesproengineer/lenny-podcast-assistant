@@ -77,7 +77,7 @@ Every section MUST be developed with substantial analytical depth, concrete fram
 - ## Application: 250–300 words (concrete real-world case studies, walkthroughs, or tactical execution patterns from transcripts)
 - ## Action Steps: 3-5 high-leverage implementation steps
 - ## Conclusion: 100–150 words (memorable closing synthesis with the overarching takeaway)
-- ## Sources: Referenced podcast episodes and guest speakers
+- ## Transcript Sources: Referenced podcast episodes, guest speakers, and timestamps
 
 ### Mandatory Article Structure:
 You MUST format the entire article with these exact Markdown headers in this exact order:
@@ -105,13 +105,15 @@ You MUST format the entire article with these exact Markdown headers in this exa
 ## Conclusion
 [100-150 words: A memorable closing synthesis with the overarching takeaway.]
 
-## Sources
-[Podcast episodes and guest speakers referenced.]
+## Transcript Sources
+Episode: <episode title>
+Guest: <guest name>
+Timestamp: <timestamp if available>
 
 ### Strict Length & Grounding Constraints:
 1. STRICT MINIMUM ARTICLE LENGTH: The entire article MUST be at least 1,200 words (Target: 1,200–1,400 words). Do NOT abbreviate, summarize, or truncate any section.
 2. Use ONLY information contained in the provided transcript context.
-3. Attribute insights to the correct guest or episode whenever possible.
+3. Attribute insights to the correct guest or episode with inline citations. The article must explicitly cite which podcast insights, frameworks, and guest quotes were used from the transcripts.
 4. If the provided context does not contain enough transcript evidence to write this article, return EXACTLY AND ONLY:
    Not enough transcript evidence available.
 5. Do NOT hallucinate.
@@ -140,19 +142,34 @@ def parse_source_reference(title: str) -> Tuple[str, Optional[str]]:
     return title.strip(), None
 
 
-def format_sources_section(sources: List[str]) -> str:
-    """Formats a guaranteed ## Sources section with episode titles and speaker names."""
+def format_sources_section(sources: List[str], chunks: Optional[List[Any]] = None) -> str:
+    """Formats a guaranteed ## Transcript Sources section with Episode, Guest, and Timestamp (Requirement 8)."""
     if not sources:
-        return "## Sources\n- Lenny's Podcast Transcripts"
+        return "## Transcript Sources\n\nEpisode: Lenny's Podcast Transcripts\nGuest: N/A\nTimestamp: N/A"
 
-    lines = ["## Sources"]
+    entries = []
+    seen = set()
     for src in sources:
         ep_title, speaker = parse_source_reference(src)
-        if speaker:
-            lines.append(f"- **{speaker}** — *\"{ep_title}\"* (Lenny's Podcast)")
-        else:
-            lines.append(f"- *\"{ep_title}\"* (Lenny's Podcast)")
-    return "\n" + "\n".join(lines)
+        key = (ep_title, speaker or "")
+        if key in seen:
+            continue
+        seen.add(key)
+        ts = "N/A"
+        if chunks:
+            for c in chunks:
+                c_title = getattr(c, "episode_title", "")
+                if c_title == src or ep_title in c_title:
+                    content_str = getattr(c, "content", getattr(c, "chunk_text", ""))
+                    match = re.search(r"\[?(\d{1,2}:\d{2}(?::\d{2})?)\]?", content_str)
+                    if match:
+                        ts = match.group(1)
+                        break
+
+        entry = f"Episode: {ep_title}\nGuest: {speaker or 'Lenny’s Podcast Guest'}\nTimestamp: {ts}"
+        entries.append(entry)
+
+    return "## Transcript Sources\n\n" + "\n\n".join(entries)
 
 
 def count_words(text: str) -> int:
@@ -311,7 +328,18 @@ class Ship30Writer:
                 try:
                     chunks = await retriever.retrieve(query=query, top_k=8)
                     if chunks:
-                        threshold = getattr(settings, "SIMILARITY_THRESHOLD", 0.65)
+                        threshold = getattr(settings, "SIMILARITY_THRESHOLD", 0.50)
+                        avg_sim = sum(c.similarity_score for c in chunks) / len(chunks) if chunks else 0.0
+                        evidence_sufficient = len(chunks) >= 2 and avg_sim >= threshold
+                        logger.info(
+                            "Grounding Check:\n"
+                            "- Chunks Retrieved: %d\n"
+                            "- Average Similarity: %.4f\n"
+                            "- Evidence Sufficient: %s",
+                            len(chunks),
+                            avg_sim,
+                            evidence_sufficient
+                        )
                         max_sim = max(c.similarity_score for c in chunks)
                         if max_sim < threshold:
                             logger.info(
@@ -520,9 +548,12 @@ class Ship30Writer:
 
             clean_essay = reconstruct_markdown(parsed_sections)
 
-        # 6. Guarantee ## Sources section with episode titles and speaker names
-        formatted_sources = format_sources_section(sources)
-        if "## Sources" in clean_essay:
+        # 6. Guarantee ## Transcript Sources section with episode titles, guest, and timestamps
+        chunks_val = chunks if 'chunks' in locals() else None
+        formatted_sources = format_sources_section(sources, chunks=chunks_val)
+        if "## Transcript Sources" in clean_essay:
+            clean_essay = re.sub(r"##\s*Transcript Sources[\s\S]*$", formatted_sources.strip(), clean_essay).strip()
+        elif "## Sources" in clean_essay:
             clean_essay = re.sub(r"##\s*Sources[\s\S]*$", formatted_sources.strip(), clean_essay).strip()
         else:
             clean_essay = clean_essay + "\n\n" + formatted_sources.strip()

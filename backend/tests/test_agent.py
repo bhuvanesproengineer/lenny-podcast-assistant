@@ -418,7 +418,8 @@ async def test_ship30_writer_explicit_context_and_sources():
     result = await writer.write("asking questions", context=custom_context)
 
     assert result.startswith("Essay generated from user supplied context.")
-    assert "## Sources" in result
+    assert ("## Transcript Sources" in result or "## Sources" in result)
+    assert "Matt LeMay" in result
     assert result.sources == ["The one question that saves product careers | Matt LeMay"]
     mock_retriever.retrieve.assert_not_called()
 

@@ -8,11 +8,15 @@ import {
   ChatResponse,
   ProviderSettingsResponse,
 } from "@/types/api";
+import {
+  API_BASE_URL,
+  PRODUCTION_API_URL,
+  getActiveApiBaseUrl,
+  failoverToProduction,
+  isLocalhost,
+} from "./config";
 
-const API_BASE = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace(
-  /\/+$/,
-  ""
-);
+export { API_BASE_URL, PRODUCTION_API_URL };
 
 class ApiError extends Error {
   status: number;
@@ -26,15 +30,36 @@ class ApiError extends Error {
   }
 }
 
+async function executeFetchWithFailover(
+  endpoint: string,
+  options: RequestInit = {}
+): Promise<Response> {
+  const cleanEndpoint = endpoint.startsWith("/") ? endpoint : `/${endpoint}`;
+  let base = getActiveApiBaseUrl();
+  let url = `${base}${cleanEndpoint}`;
+
+  try {
+    return await fetch(url, options);
+  } catch (networkErr: any) {
+    // If local backend is unreachable, automatically switch to deployed Render URL and retry
+    if (isLocalhost(base)) {
+      failoverToProduction(networkErr?.message || "Connection refused");
+      base = getActiveApiBaseUrl();
+      url = `${base}${cleanEndpoint}`;
+      return await fetch(url, options);
+    }
+    throw networkErr;
+  }
+}
+
 async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
-  const url = `${API_BASE}${endpoint}`;
   const headers = {
     "Content-Type": "application/json",
     ...(options.headers || {}),
   };
 
   try {
-    const res = await fetch(url, {
+    const res = await executeFetchWithFailover(endpoint, {
       ...options,
       headers,
     });
@@ -50,6 +75,10 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
       throw new ApiError(errorDetail, res.status);
     }
 
+    if (res.status === 204) {
+      return undefined as unknown as T;
+    }
+
     return (await res.json()) as T;
   } catch (err: any) {
     if (err instanceof ApiError) {
@@ -63,6 +92,13 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
 }
 
 export const api = {
+  /**
+   * Returns current active API base URL.
+   */
+  getBaseUrl(): string {
+    return getActiveApiBaseUrl();
+  },
+
   /**
    * Probes backend and database connectivity.
    */
@@ -119,16 +155,9 @@ export const api = {
    */
   async deleteSession(sessionId: string): Promise<void> {
     const cleanId = encodeURIComponent(sessionId.trim());
-    const url = `${API_BASE}/sessions/${cleanId}`;
-    const res = await fetch(url, { method: "DELETE" });
-    if (!res.ok && res.status !== 204) {
-      let errDetail = `Failed to delete session (${res.status})`;
-      try {
-        const j = await res.json();
-        errDetail = j.detail || errDetail;
-      } catch {}
-      throw new ApiError(errDetail, res.status);
-    }
+    return request<void>(`/sessions/${cleanId}`, {
+      method: "DELETE",
+    });
   },
 
   /**
@@ -155,23 +184,37 @@ export const api = {
    * Downloads a generated document (.docx or .pdf) from the backend export service.
    */
   async downloadExport(format: "docx" | "pdf", markdown: string, title?: string): Promise<void> {
-    const url = `${API_BASE}/export/${format}`;
-    const res = await fetch(url, {
+    const endpoint = `/export/${format}`;
+    const res = await executeFetchWithFailover(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ markdown, title }),
     });
 
     if (!res.ok) {
-      throw new Error(`Failed to export ${format.toUpperCase()}: ${res.statusText}`);
+      let errorDetail = res.statusText;
+      try {
+        const errorJson = await res.json();
+        errorDetail = errorJson.detail || errorJson.error || errorDetail;
+      } catch {
+        // Not JSON
+      }
+      throw new Error(`Failed to export ${format.toUpperCase()}: ${errorDetail}`);
     }
 
-    const blob = await res.blob();
-    const downloadUrl = window.URL.createObjectURL(blob);
-    const safeTitle = (title || "ship30-article")
-      .toLowerCase()
-      .replace(/[^\w\s-]/g, "")
-      .replace(/[-\s]+/g, "-");
+    const rawBlob = await res.blob();
+    const mimeType =
+      format === "pdf"
+        ? "application/pdf"
+        : "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+    const fileBlob = new Blob([rawBlob], { type: mimeType });
+    const downloadUrl = window.URL.createObjectURL(fileBlob);
+    const safeTitle =
+      (title || "ship30-article")
+        .toLowerCase()
+        .replace(/[^\w\s-]/g, "")
+        .replace(/[-\s]+/g, "-")
+        .slice(0, 60) || "ship30-article";
     const link = document.createElement("a");
     link.href = downloadUrl;
     link.download = `${safeTitle}.${format}`;

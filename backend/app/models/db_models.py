@@ -1,7 +1,8 @@
 import uuid
 from datetime import datetime
 from typing import List
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Index, func
+from sqlalchemy import Column, Integer, String, Text, DateTime, Date, ForeignKey, Index, func
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import relationship
 from pgvector.sqlalchemy import Vector
 from app.database import Base
@@ -123,3 +124,23 @@ class Message(Base):
 
     def __repr__(self) -> str:
         return f"<Message(id={self.id}, session_id='{self.session_id}', role='{self.role}')>"
+
+
+class TranscriptChunkGemini(Base):
+    """
+    Represents an embedded text chunk derived from an episode transcript
+    stored in the transcript_chunks_gemini table with Gemini embeddings (768 dim).
+    """
+    __tablename__ = "transcript_chunks_gemini"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    episode_title = Column(Text, nullable=True)
+    guest_name = Column(Text, nullable=True)
+    publication_date = Column(Date, nullable=True)
+    timestamp_ref = Column(Text, nullable=True)
+    youtube_url = Column(Text, nullable=True)
+    chunk_text = Column(Text, nullable=False)
+    embedding = Column(Vector(768), nullable=True)
+
+    def __repr__(self) -> str:
+        return f"<TranscriptChunkGemini(id={self.id}, episode_title='{self.episode_title}', guest_name='{self.guest_name}')>"

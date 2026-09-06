@@ -206,7 +206,7 @@ export function ModelSettingsModal({
                   </div>
                   <div>
                     <h3 className="text-sm font-medium text-[#F3F4F6]">Cloud LLM</h3>
-                    <span className="text-[10px] text-blue-400 font-mono">Anthropic Claude</span>
+                    <span className="text-[10px] text-blue-400 font-mono">Groq Cloud</span>
                   </div>
                 </div>
                 {currentActive === 'cloud' && (
@@ -219,12 +219,12 @@ export function ModelSettingsModal({
               <div className="space-y-1.5 text-xs text-[#9CA3AF] mt-3">
                 <div className="flex justify-between font-mono text-[11px]">
                   <span>Gateway:</span>
-                  <span className="text-[#F3F4F6]">OpenRouter</span>
+                  <span className="text-[#F3F4F6]">Groq API</span>
                 </div>
                 <div className="flex justify-between font-mono text-[11px]">
                   <span>Model:</span>
                   <span className="text-blue-300 font-semibold truncate max-w-[140px]" title={settings?.cloud?.model}>
-                    {settings?.cloud?.model || 'anthropic/claude-sonnet-4'}
+                    {settings?.cloud?.model || 'openai/gpt-oss-20b'}
                   </span>
                 </div>
                 <div className="flex justify-between font-mono text-[11px]">

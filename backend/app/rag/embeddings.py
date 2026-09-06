@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import List, Optional, Dict, Any
 
 import httpx
-from sqlalchemy import select, func
+from sqlalchemy import select, func, update
 
 # Ensure backend directory is in sys.path
 backend_dir = Path(__file__).resolve().parent.parent.parent
@@ -41,10 +41,23 @@ class EmbeddingGenerator:
         timeout: float = 60.0
     ):
         self.base_url = (base_url or settings.OLLAMA_BASE_URL).rstrip("/")
-        self.model = model or settings.EMBEDDING_MODEL
+        selected_model = model or getattr(settings, "EMBEDDING_MODEL", "nomic-embed-text")
+        # If model is unspecified or still configured for cloud (e.g. models/gemini-embedding-001), fallback to nomic-embed-text
+        if not selected_model or selected_model.startswith("models/") or "gemini" in selected_model.lower():
+            selected_model = "nomic-embed-text"
+        self.model = selected_model
         self.timeout = timeout
         self._client: Optional[httpx.AsyncClient] = None
         self._client_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._use_legacy_endpoint: bool = False
+
+    @property
+    def provider(self) -> str:
+        return "ollama"
+
+    @property
+    def dimension(self) -> int:
+        return getattr(settings, "EMBEDDING_DIMENSION", 768)
 
     async def get_client(self) -> httpx.AsyncClient:
         try:
@@ -73,6 +86,29 @@ class EmbeddingGenerator:
         if self._client and not self._client.is_closed:
             await self._client.aclose()
 
+    async def _get_embeddings_legacy(
+        self,
+        client: httpx.AsyncClient,
+        texts: List[str]
+    ) -> List[List[float]]:
+        """
+        Universal fallback using Ollama's legacy /api/embeddings endpoint.
+        Compatible with all Ollama versions (takes 'prompt' instead of 'input').
+        Normalizes vectors to unit length for identical vector space geometry.
+        """
+        url = f"{self.base_url}/api/embeddings"
+
+        async def _embed_single(t: str) -> List[float]:
+            res = await client.post(url, json={"model": self.model, "prompt": t})
+            res.raise_for_status()
+            emb = res.json().get("embedding", [])
+            if not emb:
+                raise ValueError(f"Empty embedding returned from {url}")
+            norm = sum(x * x for x in emb) ** 0.5
+            return [x / norm for x in emb] if norm > 0 else emb
+
+        return await asyncio.gather(*[_embed_single(text) for text in texts])
+
     async def get_embeddings(
         self,
         texts: List[str],
@@ -81,9 +117,16 @@ class EmbeddingGenerator:
     ) -> List[List[float]]:
         """
         Generates dense vector embeddings for a list of text strings with exponential backoff.
+        Automatically attempts modern /api/embed and falls back to universal /api/embeddings on 404.
         """
         if not texts:
             return []
+
+        client = await self.get_client()
+
+        # If already known that /api/embed returned 404 on this Ollama host, route directly to legacy endpoint
+        if self._use_legacy_endpoint:
+            return await self._get_embeddings_legacy(client, texts)
 
         url = f"{self.base_url}/api/embed"
         payload = {
@@ -91,12 +134,18 @@ class EmbeddingGenerator:
             "input": texts
         }
 
-        client = await self.get_client()
         last_error = None
 
         for attempt in range(1, max_retries + 1):
             try:
                 response = await client.post(url, json=payload)
+                if response.status_code == 404:
+                    logger.warning(
+                        "Ollama /api/embed returned 404 Not Found. Falling back to universal /api/embeddings endpoint."
+                    )
+                    self._use_legacy_endpoint = True
+                    return await self._get_embeddings_legacy(client, texts)
+
                 response.raise_for_status()
                 data = response.json()
 
@@ -108,6 +157,13 @@ class EmbeddingGenerator:
                 return embeddings
 
             except Exception as exc:
+                if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code == 404:
+                    logger.warning(
+                        "Ollama /api/embed 404 detected. Falling back to universal /api/embeddings endpoint."
+                    )
+                    self._use_legacy_endpoint = True
+                    return await self._get_embeddings_legacy(client, texts)
+
                 last_error = exc
                 wait_time = backoff_factor ** attempt
                 logger.warning(
@@ -124,6 +180,21 @@ class EmbeddingGenerator:
         raise RuntimeError(f"Embedding generation failed: {last_error}") from last_error
 
     async def get_single_embedding(self, text: str) -> List[float]:
+        """Generates embedding for a single text, routing optimally depending on endpoint support."""
+        if self._use_legacy_endpoint:
+            client = await self.get_client()
+            url = f"{self.base_url}/api/embeddings"
+            try:
+                res = await client.post(url, json={"model": self.model, "prompt": text})
+                res.raise_for_status()
+                emb = res.json().get("embedding", [])
+                if not emb:
+                    raise ValueError(f"Empty embedding returned from {url}")
+                norm = sum(x * x for x in emb) ** 0.5
+                return [x / norm for x in emb] if norm > 0 else emb
+            except Exception as exc:
+                logger.warning(f"Single embedding request on /api/embeddings failed: {exc}. Retrying via batch...")
+
         results = await self.get_embeddings([text])
         if not results:
             raise ValueError("No embedding returned")
@@ -133,7 +204,8 @@ class EmbeddingGenerator:
 async def run_embedding_pipeline(
     batch_size: int = 100,
     limit: Optional[int] = None,
-    max_retries: int = 3
+    max_retries: int = 3,
+    reset_existing: bool = False
 ) -> Dict[str, Any]:
     """
     Scans for TranscriptChunk records without embeddings, generates embeddings in batches,
@@ -154,11 +226,19 @@ async def run_embedding_pipeline(
     logger.info(f"Batch Size     : {batch_size}")
     if limit:
         logger.info(f"Process Limit  : {limit} chunks")
+    if reset_existing:
+        logger.info("Reset Existing : True (clearing existing chunk embeddings)")
     logger.info("=" * 70)
 
     await init_db()
 
     async with AsyncSessionLocal() as session:
+        if reset_existing:
+            logger.info("Resetting all existing embeddings to NULL...")
+            await session.execute(update(TranscriptChunk).values(embedding=None))
+            await session.commit()
+            logger.info("Existing embeddings reset successfully.")
+
         # 1. Total chunk count across table
         total_chunks_stmt = select(func.count(TranscriptChunk.id))
         total_chunks = (await session.execute(total_chunks_stmt)).scalar() or 0
@@ -304,6 +384,12 @@ def main():
         default=None,
         help="Embedding model name (defaults to settings.EMBEDDING_MODEL)."
     )
+    parser.add_argument(
+        "--reset",
+        action="store_true",
+        default=False,
+        help="Reset existing embeddings before processing."
+    )
 
     args = parser.parse_args()
 
@@ -312,7 +398,8 @@ def main():
 
     asyncio.run(run_embedding_pipeline(
         batch_size=args.batch_size,
-        limit=args.limit
+        limit=args.limit,
+        reset_existing=args.reset
     ))
 
 

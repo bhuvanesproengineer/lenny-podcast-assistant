@@ -18,6 +18,7 @@ from pi_agent.tools.base import Tool, Sandbox
 
 from app.rag.retriever import RAGService
 from app.skills.ship30_writer import Ship30Writer
+from app.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -82,13 +83,19 @@ def build_podcast_rag_tool(rag_service: Optional[RAGService] = None) -> Tool:
 
     def handler(args: Dict[str, Any], sandbox: Sandbox) -> str:
         question = args.get("question", "")
-        # Ensure at least 5 chunks are retrieved so small models do not starve context
-        top_k = max(5, int(args.get("top_k", 6)))
+        from app.providers.provider_factory import get_active_provider_name
+        active_provider = get_active_provider_name()
+
+        # Cloud mode gets top_k=4 reduction; Local Ollama mode strictly untouched (min 5, default 6)
+        if active_provider in ("cloud", "groq"):
+            top_k = int(args.get("top_k", getattr(settings, "CLOUD_TOP_K", 4))) if "top_k" in args else getattr(settings, "CLOUD_TOP_K", 4)
+        else:
+            top_k = max(5, int(args.get("top_k", 6)))
 
         t0 = time.time()
         logger.info(
-            "PodcastRAGTool invoked | Rewritten Query: '%s' | top_k: %d",
-            question, top_k,
+            "PodcastRAGTool invoked | Provider: %s | Rewritten Query: '%s' | top_k: %d",
+            active_provider, question, top_k,
             extra={"rewritten_query": question, "top_k": top_k}
         )
         try:
@@ -198,9 +205,13 @@ def build_ship30_tool(
                     try:
                         chunks = _run_async(active_retriever.retrieve(query=topic, top_k=8))
                         if chunks:
+                            threshold = getattr(settings, "SIMILARITY_THRESHOLD", 0.50)
                             max_sim = max(c.similarity_score for c in chunks)
-                            if max_sim < 0.65:
-                                logger.info("Ship30Tool: Chunks for '%s' below similarity threshold (max %.4f < 0.65)", topic, max_sim)
+                            if max_sim < threshold:
+                                logger.info(
+                                    "Ship30Tool: Chunks for '%s' below similarity threshold (max %.4f < %.2f)",
+                                    topic, max_sim, threshold
+                                )
                                 chunks = []
 
                         if chunks:

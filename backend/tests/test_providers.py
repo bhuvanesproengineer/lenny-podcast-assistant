@@ -9,9 +9,18 @@ from app.providers.cloud_provider import CloudProvider
 from app.skills.artifact_generator import ArtifactGenerator, ArtifactType, GeneratedArtifact
 
 
+from app.providers.provider_factory import reset_active_provider_name
+
+
 @pytest.fixture
 def anyio_backend():
     return "asyncio"
+
+
+@pytest.fixture(autouse=True)
+def cleanup_provider_override():
+    yield
+    reset_active_provider_name()
 
 
 def test_base_provider_abstract():
@@ -181,9 +190,11 @@ def test_provider_factory_and_fallback():
     # Switching to cloud with no API key should fall back to Ollama gracefully
     with patch.dict("os.environ", {}, clear=True):
         with patch("app.config.settings.OPENROUTER_API_KEY", ""):
-            with patch("app.config.settings.FALLBACK_TO_LOCAL", True):
-                fallback_p = get_provider("cloud", fallback_on_error=True)
-                assert fallback_p.provider_name == "ollama"
+            with patch("app.config.settings.OPENAI_API_KEY", ""):
+                with patch("app.config.settings.GROQ_API_KEY", ""):
+                    with patch("app.config.settings.FALLBACK_TO_LOCAL", True):
+                        fallback_p = get_provider("cloud", fallback_on_error=True)
+                        assert fallback_p.provider_name == "ollama"
 
     # Switching to cloud with API key succeeds
     with patch.dict("os.environ", {"OPENROUTER_API_KEY": "sk-or-v1-test"}):
@@ -197,3 +208,101 @@ def test_provider_factory_and_fallback():
     assert "local" in status
     assert "cloud" in status
     assert "fallback_enabled" in status
+
+
+@pytest.mark.anyio
+async def test_groq_provider_generate_success():
+    from app.providers.groq_provider import GroqProvider
+
+    provider = GroqProvider(
+        api_key="gsk-mock-key",
+        base_url="https://api.groq.com/openai/v1",
+        model="openai/gpt-oss-20b"
+    )
+    assert provider.provider_name == "groq"
+    assert provider.model_name == "openai/gpt-oss-20b"
+    assert provider.is_local is False
+    assert provider.is_configured() is True
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = {
+        "choices": [
+            {"message": {"role": "assistant", "content": "Groq response text"}}
+        ]
+    }
+
+    with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+        mock_post.return_value = mock_resp
+
+        result = await provider.generate(
+            prompt="What is product growth?",
+            system_prompt="Be concise",
+            temperature=0.2,
+        )
+
+        assert result == "Groq response text"
+        mock_post.assert_awaited_once()
+        args, kwargs = mock_post.call_args
+        assert args[0] == "https://api.groq.com/openai/v1/chat/completions"
+        assert kwargs["headers"]["Authorization"] == "Bearer gsk-mock-key"
+        assert kwargs["json"]["model"] == "openai/gpt-oss-20b"
+        assert kwargs["json"]["messages"][0] == {"role": "system", "content": "Be concise"}
+        assert kwargs["json"]["messages"][1] == {"role": "user", "content": "What is product growth?"}
+
+
+@pytest.mark.anyio
+async def test_groq_provider_generate_error():
+    from app.providers.groq_provider import GroqProvider
+
+    provider = GroqProvider(api_key="bad-groq-key")
+
+    with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
+        mock_post.side_effect = httpx.HTTPStatusError("401 Unauthorized", request=MagicMock(), response=MagicMock())
+
+        with pytest.raises(RuntimeError, match="Groq generation error"):
+            await provider.generate("Hello Groq")
+
+
+@pytest.mark.anyio
+async def test_groq_provider_common_interface():
+    from app.providers.groq_provider import GroqProvider
+
+    groq = GroqProvider(api_key="gsk-test")
+    with patch.object(groq, "generate", new_callable=AsyncMock) as mock_gen:
+        mock_gen.return_value = "Grounded Groq Answer"
+        resp = await groq.generate_response("User question")
+        assert resp == "Grounded Groq Answer"
+        mock_gen.assert_awaited_once()
+
+    with patch.object(groq, "generate", new_callable=AsyncMock) as mock_gen:
+        mock_gen.return_value = "# Ship30 Title\n## Hook\nContent"
+        article = await groq.generate_ship30_article("Retention Loops")
+        assert "Ship30 Title" in article
+        mock_gen.assert_awaited_once()
+
+
+def test_provider_factory_groq_routing():
+    from app.providers.provider_factory import (
+        get_provider,
+        set_active_provider_name,
+        get_active_provider_name,
+    )
+
+    # Test explicit groq routing
+    with patch.dict("os.environ", {"GROQ_API_KEY": "gsk_test_valid"}):
+        with patch("app.config.settings.GROQ_API_KEY", "gsk_test_valid"):
+            set_active_provider_name("groq")
+            assert get_active_provider_name() == "groq"
+            prov = get_provider("groq")
+            assert prov.provider_name == "groq"
+            assert prov.is_local is False
+
+    # Test fallback to ollama when groq key missing
+    with patch.dict("os.environ", {"GROQ_API_KEY": ""}, clear=True):
+        with patch("app.config.settings.GROQ_API_KEY", ""):
+            with patch("app.config.settings.FALLBACK_TO_LOCAL", True):
+                fallback = get_provider("groq", fallback_on_error=True)
+                assert fallback.provider_name == "ollama"
+                assert fallback.is_local is True

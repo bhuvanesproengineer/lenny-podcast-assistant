@@ -83,12 +83,12 @@ export function Header({
               ? 'bg-blue-500/10 border-blue-500/30 text-blue-400 hover:bg-blue-500/20 hover:border-blue-500/50'
               : 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20 hover:border-emerald-500/50'
           }`}
-          title="Click to configure Dual Model Layer (Local Ollama vs Cloud Claude)"
+          title="Click to configure Dual Model Layer (Local Ollama vs Cloud Groq)"
         >
           {activeProvider === 'cloud' ? (
             <>
               <Cloud className="w-3.5 h-3.5 text-blue-400" />
-              <span>Claude Cloud</span>
+              <span>Cloud (Groq)</span>
             </>
           ) : (
             <>

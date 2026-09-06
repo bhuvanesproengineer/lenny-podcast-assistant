@@ -8,13 +8,13 @@ import httpx
 from app.config import settings
 from app.providers.base_provider import BaseProvider
 
-logger = logging.getLogger("cloud_provider")
+logger = logging.getLogger("groq_provider")
 
 
-class CloudProvider(BaseProvider):
+class GroqProvider(BaseProvider):
     """
-    Cloud LLM provider using OpenAI-compatible chat completion APIs (Groq, OpenRouter, etc.).
-    Always dynamically resolves base_url from OPENAI_BASE_URL / environment variables.
+    Cloud LLM provider using Groq OpenAI-compatible API.
+    Provides high-speed inference for Chat, RAG generation, and Ship30 articles.
     """
 
     def __init__(
@@ -24,56 +24,30 @@ class CloudProvider(BaseProvider):
         model: Optional[str] = None,
         timeout: float = 120.0,
     ):
-        # API Key: prioritize OPENAI_API_KEY, GROQ_API_KEY, OPENROUTER_API_KEY, ANTHROPIC_API_KEY
-        self.api_key = (
-            api_key
-            or os.getenv("OPENAI_API_KEY")
-            or getattr(settings, "OPENAI_API_KEY", "")
-            or os.getenv("GROQ_API_KEY")
-            or getattr(settings, "GROQ_API_KEY", "")
-            or os.getenv("OPENROUTER_API_KEY")
-            or getattr(settings, "OPENROUTER_API_KEY", "")
-            or os.getenv("ANTHROPIC_API_KEY")
-            or getattr(settings, "ANTHROPIC_API_KEY", "")
-            or ""
-        )
-
-        # Base URL: always resolve from OPENAI_BASE_URL or equivalent environment variables
-        env_base_url = (
-            os.getenv("OPENAI_BASE_URL")
-            or getattr(settings, "OPENAI_BASE_URL", "")
+        if api_key is not None:
+            self.api_key = api_key
+        else:
+            self.api_key = (
+                os.getenv("GROQ_API_KEY")
+                if "GROQ_API_KEY" in os.environ
+                else getattr(settings, "GROQ_API_KEY", "")
+            ) or ""
+        self.base_url = (
+            base_url
             or os.getenv("GROQ_BASE_URL")
-            or getattr(settings, "GROQ_BASE_URL", "")
-            or os.getenv("OPENROUTER_BASE_URL")
-            or getattr(settings, "OPENROUTER_BASE_URL", "")
-            or ""
-        )
-        self.base_url = (base_url or env_base_url).rstrip("/")
-
-        # Model: resolve from MODEL, OPENAI_MODEL, GROQ_MODEL, CLOUD_MODEL
+            or getattr(settings, "GROQ_BASE_URL", "https://api.groq.com/openai/v1")
+        ).rstrip("/")
         self.model = (
             model
-            or os.getenv("OPENAI_MODEL")
-            or os.getenv("MODEL")
             or os.getenv("GROQ_MODEL")
-            or getattr(settings, "GROQ_MODEL", "")
-            or os.getenv("CLOUD_MODEL")
-            or getattr(settings, "CLOUD_MODEL", "")
-            or "openai/gpt-oss-20b"
+            or os.getenv("MODEL")
+            or getattr(settings, "GROQ_MODEL", "openai/gpt-oss-20b")
         )
         self.timeout = timeout
 
-        # Startup logging
-        logger.info(
-            "LLM Provider: %s\nBase URL: %s\nModel: %s",
-            self.provider_name,
-            self.base_url,
-            self.model,
-        )
-
     @property
     def provider_name(self) -> str:
-        return "cloud"
+        return "groq"
 
     @property
     def model_name(self) -> str:
@@ -84,7 +58,7 @@ class CloudProvider(BaseProvider):
         return False
 
     def is_configured(self) -> bool:
-        """Returns True if a cloud API key is present."""
+        """Returns True if a Groq API key is present."""
         return bool(self.api_key and self.api_key.strip())
 
     async def generate_response(
@@ -95,7 +69,7 @@ class CloudProvider(BaseProvider):
         **kwargs: Any,
     ) -> str:
         """
-        Common interface method: Generates a complete response using Cloud LLM.
+        Common interface method: Generates a complete response for Q&A or RAG synthesis.
         """
         return await self.generate(
             prompt=prompt,
@@ -113,24 +87,23 @@ class CloudProvider(BaseProvider):
         **kwargs: Any,
     ) -> str:
         """
-        Common interface method: Generates a full Ship30 article using Cloud LLM.
+        Common interface method: Generates a complete Ship30 article using Groq.
         """
         prompt = (
-            f"Write an authoritative, high-impact Ship 30 for 30 style growth article on the topic:\n"
+            f"Write a comprehensive Ship 30 for 30 style growth article on the topic:\n"
             f"\"{topic}\"\n\n"
         )
         if context:
-            prompt += f"Ground your writing in the following Lenny's Podcast transcript excerpts:\n{context}\n\n"
+            prompt += f"Use the following podcast transcript context:\n{context}\n\n"
         prompt += (
-            "Ensure the article strictly adheres to the standard Ship30 structure:\n"
-            "# [Action-Oriented Title]\n"
+            "Ensure the article follows the standard Ship30 format:\n"
+            "# [Actionable Title]\n"
             "## Hook\n"
             "## Problem\n"
             "## Insight\n"
             "## Lesson\n"
             "## Application\n"
             "## Action Steps\n"
-            "## Sources\n"
         )
         return await self.generate(
             prompt=prompt,
@@ -148,18 +121,12 @@ class CloudProvider(BaseProvider):
         **kwargs: Any,
     ) -> str:
         """
-        Generates a non-streaming completion response via OpenAI-compatible chat API.
+        Generates a non-streaming completion response via Groq API.
         """
         if not self.is_configured():
             raise RuntimeError(
-                "CloudProvider requires an API key (OPENAI_API_KEY, GROQ_API_KEY, or OPENROUTER_API_KEY). "
-                "Please configure OPENAI_API_KEY in .env or switch to Ollama."
-            )
-
-        if not self.base_url:
-            raise RuntimeError(
-                "CloudProvider requires a base URL (OPENAI_BASE_URL). "
-                "Please configure OPENAI_BASE_URL in .env."
+                "GroqProvider requires an API key (GROQ_API_KEY). "
+                "Please configure GROQ_API_KEY in .env or switch to Ollama."
             )
 
         url = f"{self.base_url}/chat/completions"
@@ -167,12 +134,6 @@ class CloudProvider(BaseProvider):
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
-
-        # OpenRouter-specific attribution headers when targeting OpenRouter
-        if "openrouter" in self.base_url.lower():
-            referer = getattr(settings, "CORS_ORIGINS", "http://localhost:3000").split(",")[0].strip()
-            headers["HTTP-Referer"] = referer
-            headers["X-Title"] = "Lenny Growth Assistant"
 
         messages = []
         if system_prompt:
@@ -189,8 +150,13 @@ class CloudProvider(BaseProvider):
             payload["max_tokens"] = kwargs["max_tokens"]
         elif "num_predict" in kwargs:
             payload["max_tokens"] = kwargs["num_predict"]
-        else:
-            payload["max_tokens"] = 3000
+
+        # TPM Protection & Token Estimation for Cloud Mode
+        from app.rag.cloud_optimizations import get_cloud_tpm_tracker, estimate_tokens
+        prompt_text = (system_prompt or "") + " " + prompt
+        estimated_tokens = estimate_tokens(prompt_text) + int(payload.get("max_tokens", 500))
+        tracker = get_cloud_tpm_tracker()
+        await tracker.acquire(estimated_tokens)
 
         max_retries = kwargs.get("max_retries", 3)
         for attempt in range(1, max_retries + 1):
@@ -200,7 +166,7 @@ class CloudProvider(BaseProvider):
                     if response.status_code == 429 and attempt < max_retries:
                         retry_after = float(response.headers.get("retry-after", 2.0))
                         logger.warning(
-                            "Cloud provider rate limit (429) on attempt %d/%d. Waiting %.2fs...",
+                            "Groq rate limit (429) on attempt %d/%d. Waiting %.2fs...",
                             attempt, max_retries, retry_after
                         )
                         await asyncio.sleep(retry_after)
@@ -213,6 +179,7 @@ class CloudProvider(BaseProvider):
                         content = msg.get("content")
                         if content is not None and content.strip():
                             return content.strip()
+                        # Fallback if content was placed in reasoning or other field
                         reasoning = msg.get("reasoning", "")
                         if reasoning:
                             return reasoning.strip()
@@ -221,25 +188,25 @@ class CloudProvider(BaseProvider):
                 if exc.response.status_code == 429 and attempt < max_retries:
                     retry_after = float(exc.response.headers.get("retry-after", 2.0))
                     logger.warning(
-                        "Cloud provider rate limit (429) on attempt %d/%d. Waiting %.2fs...",
+                        "Groq rate limit (429) on attempt %d/%d. Waiting %.2fs...",
                         attempt, max_retries, retry_after
                     )
                     await asyncio.sleep(retry_after)
                     continue
                 logger.error(
-                    f"Cloud generation failed for model '{self.model}' at '{url}': {exc}",
+                    f"Groq generation failed for model '{self.model}' at '{url}': {exc}",
                     exc_info=True,
                 )
-                raise RuntimeError(f"Cloud generation error: {exc}") from exc
+                raise RuntimeError(f"Groq generation error: {exc}") from exc
             except Exception as exc:
                 if attempt < max_retries:
                     await asyncio.sleep(1.0)
                     continue
                 logger.error(
-                    f"Cloud generation failed for model '{self.model}' at '{url}': {exc}",
+                    f"Groq generation failed for model '{self.model}' at '{url}': {exc}",
                     exc_info=True,
                 )
-                raise RuntimeError(f"Cloud generation error: {exc}") from exc
+                raise RuntimeError(f"Groq generation error: {exc}") from exc
 
     async def generate_stream(
         self,
@@ -253,13 +220,7 @@ class CloudProvider(BaseProvider):
         """
         if not self.is_configured():
             raise RuntimeError(
-                "CloudProvider requires an API key (OPENAI_API_KEY, GROQ_API_KEY, or OPENROUTER_API_KEY)."
-            )
-
-        if not self.base_url:
-            raise RuntimeError(
-                "CloudProvider requires a base URL (OPENAI_BASE_URL). "
-                "Please configure OPENAI_BASE_URL in .env."
+                "GroqProvider requires an API key (GROQ_API_KEY)."
             )
 
         url = f"{self.base_url}/chat/completions"
@@ -267,11 +228,6 @@ class CloudProvider(BaseProvider):
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
-
-        if "openrouter" in self.base_url.lower():
-            referer = getattr(settings, "CORS_ORIGINS", "http://localhost:3000").split(",")[0].strip()
-            headers["HTTP-Referer"] = referer
-            headers["X-Title"] = "Lenny Growth Assistant"
 
         messages = []
         if system_prompt:
@@ -286,6 +242,15 @@ class CloudProvider(BaseProvider):
         }
         if "max_tokens" in kwargs:
             payload["max_tokens"] = kwargs["max_tokens"]
+        elif "num_predict" in kwargs:
+            payload["max_tokens"] = kwargs["num_predict"]
+
+        # TPM Protection & Token Estimation for Cloud Mode
+        from app.rag.cloud_optimizations import get_cloud_tpm_tracker, estimate_tokens
+        prompt_text = (system_prompt or "") + " " + prompt
+        estimated_tokens = estimate_tokens(prompt_text) + int(payload.get("max_tokens", 500))
+        tracker = get_cloud_tpm_tracker()
+        await tracker.acquire(estimated_tokens)
 
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
@@ -310,7 +275,7 @@ class CloudProvider(BaseProvider):
                             continue
         except Exception as exc:
             logger.error(
-                f"Cloud streaming failed for model '{self.model}': {exc}",
+                f"Groq streaming failed for model '{self.model}': {exc}",
                 exc_info=True,
             )
-            raise RuntimeError(f"Cloud streaming error: {exc}") from exc
+            raise RuntimeError(f"Groq streaming error: {exc}") from exc

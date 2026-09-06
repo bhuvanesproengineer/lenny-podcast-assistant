@@ -104,14 +104,14 @@ class ChatResponse(BaseModel):
 
 class SetProviderRequest(BaseModel):
     """Payload for changing the active LLM provider."""
-    provider: str = Field(..., description="Target provider ('ollama' or 'cloud')")
+    provider: str = Field(..., description="Target provider ('ollama', 'groq', or 'cloud')")
 
     @field_validator("provider")
     @classmethod
     def validate_provider(cls, v: str) -> str:
         clean = v.strip().lower()
-        if clean not in ("ollama", "cloud"):
-            raise ValueError("Provider must be either 'ollama' or 'cloud'.")
+        if clean not in ("ollama", "cloud", "groq"):
+            raise ValueError("Provider must be 'ollama', 'groq', or 'cloud'.")
         return clean
 
 

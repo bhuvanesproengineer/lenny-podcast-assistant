@@ -147,14 +147,47 @@ class PiLLMProviderAdapter:
 def get_current_pi_provider(force_local: bool = False) -> LLMProvider:
     """Instantiates the active LLM provider for Pi Coding Agent.
     
-    Checks dynamic runtime provider setting ('cloud' vs 'ollama').
-    When 'cloud' is selected, connects to OpenRouter / Claude.
+    Checks dynamic runtime provider setting ('groq', 'cloud' vs 'ollama').
+    When 'groq' (or 'cloud' with Groq configured) is selected, connects to Groq.
     When 'ollama' is selected (or if cloud fails and fallback is requested),
     uses local Ollama with llama3.2:3b.
     """
     active_name = "ollama" if force_local else get_active_provider_name()
 
-    if active_name == "cloud":
+    if active_name in ("groq", "cloud"):
+        groq_key = (
+            getattr(settings, "GROQ_API_KEY", "")
+            or os.getenv("GROQ_API_KEY")
+            or ""
+        )
+        if groq_key:
+            try:
+                base_url = (
+                    getattr(settings, "GROQ_BASE_URL", "")
+                    or os.getenv("GROQ_BASE_URL")
+                    or "https://api.groq.com/openai/v1"
+                )
+                groq_model = (
+                    getattr(settings, "GROQ_MODEL", "")
+                    or os.getenv("GROQ_MODEL")
+                    or os.getenv("MODEL")
+                    or "openai/gpt-oss-20b"
+                )
+                logger.info(
+                    "Instantiating Groq provider for Agent: model='%s', base_url='%s'",
+                    groq_model,
+                    base_url,
+                )
+                provider = OpenAIProvider(
+                    model=groq_model,
+                    api_key=groq_key,
+                    base_url=base_url,
+                    max_tokens=4096,
+                )
+                return PiLLMProviderAdapter(provider)
+            except Exception as exc:
+                logger.error("Failed to build Groq provider for agent: %s. Falling back to local.", exc)
+
         key = (
             getattr(settings, "OPENROUTER_API_KEY", "")
             or os.getenv("OPENROUTER_API_KEY")
@@ -433,11 +466,11 @@ class LennyAgent:
             # Offload synchronous pi_agent execution to thread pool with rewritten query
             final_text = await asyncio.to_thread(pi_agent_instance.run, rewritten_query)
         except Exception as exc:
-            # Automatic Fallback: If cloud failed and fallback to local is enabled, retry with local Ollama
+            # Automatic Fallback: If cloud/groq failed and fallback to local is enabled, retry with local Ollama
             active_p = get_active_provider_name()
-            if active_p == "cloud" and getattr(settings, "FALLBACK_TO_LOCAL", True):
+            if active_p in ("cloud", "groq") and getattr(settings, "FALLBACK_TO_LOCAL", True):
                 self.logger.warning(
-                    "Cloud provider execution failed in LennyAgent: %s. Automatically falling back to local Ollama...",
+                    "Cloud/Groq provider execution failed in LennyAgent: %s. Automatically falling back to local Ollama...",
                     exc,
                 )
                 try:
